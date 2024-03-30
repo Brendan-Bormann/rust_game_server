@@ -1,92 +1,88 @@
 use std::net::UdpSocket;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{thread, thread::sleep};
 
-mod game;
-mod packets;
+use packet::BasePacket;
 
-const SERV_ADDR: &str = "127.0.0.1:8080";
+mod game;
+mod network;
+mod packet;
+
+const SERV_ADDR: &str = "127.0.0.1:5000";
 
 fn main() {
-    println!("\nServer started...");
+    println!("\n--- Server started ---");
+    let mut server = network::Server::new(SERV_ADDR);
 
-    let socket = UdpSocket::bind(SERV_ADDR).unwrap();
-    println!("Server bound to {}", SERV_ADDR);
-    let socket_clone = socket.try_clone().unwrap();
-
-    let (gs_sender, gs_receiver): (Sender<game::Game>, Receiver<game::Game>) = channel();
-    let (pi_sender, pi_receiver): (Sender<packets::BasePacket>, Receiver<packets::BasePacket>) =
-        channel();
+    let (state_sender, state_receiver): (Sender<game::Game>, Receiver<game::Game>) = channel();
+    let (player_command_sender, player_command_receiver): (
+        Sender<game::PlayerCommand>,
+        Receiver<game::PlayerCommand>,
+    ) = channel();
 
     thread::spawn(move || {
-        // game state and loop
-        println!("Game created");
-        let mut game_state = game::Game::new();
+        println!("- Game world started");
+
+        let mut game = game::Game::new();
 
         loop {
             sleep(Duration::from_millis(100));
-            game_state.game_tick();
+            game.game_tick();
 
-            match pi_receiver.recv_timeout(Duration::from_millis(0)) {
-                Ok(packet) => game_state.handle_packet(packet),
+            match player_command_receiver.recv_timeout(Duration::from_millis(0)) {
+                Ok(player_command) => game.handle_command(player_command),
                 Err(_) => {}
             }
 
-            gs_sender.send(game_state.clone()).unwrap();
+            state_sender.send(game.clone()).unwrap();
         }
     });
 
-    thread::spawn(move || {
-        // incoming packets
-        println!("Listening for packets...");
-        packet_listener(socket, pi_sender);
-    });
+    loop {
+        server.check_socket_error();
 
-    thread::spawn(move || {
-        // out going packets
-        println!("Ready to send packets!");
-        loop {
-            let game_state = gs_receiver.recv().unwrap();
-            let game_state_string = serde_json::to_string(&game_state).unwrap();
-            let game_state_bytes = game_state_string.as_bytes();
+        let current_state = state_receiver.recv().unwrap();
+        let current_state_string = serde_json::to_string(&current_state).unwrap();
 
-            game_state.players.iter().for_each(|player| {
-                socket_clone
-                    .send_to(&game_state_bytes, &player.addr)
-                    .unwrap();
-            });
+        server
+            .send_packet_to_all_clients(current_state_string)
+            .expect("Failed to send state to clients");
+
+        if server.check_for_packets() {
+            println!("Packet received!");
+
+            let (packet, addr) = server.receive_packet_from().unwrap();
+
+            let client = match server.check_for_addr(addr.clone()) {
+                Some(client) => client,
+                None => server.create_client(addr.clone()),
+            };
+
+            server.reset_client_timeout(client.id.clone());
+
+            handle_packet(&player_command_sender, client, packet);
         }
-    });
 
-    loop {}
+        server.check_clients_for_timeout();
+    }
 }
 
-fn packet_listener(socket: UdpSocket, pi_sender: Sender<packets::BasePacket>) {
-    loop {
-        let mut buffer = vec![0u8; 4096];
-        let (data_len, addr) = socket
-            .recv_from(&mut buffer)
-            .expect("Failed to receive message on UDP socket.");
-        let (trimmed_buffer, _) = &buffer[..].split_at(data_len);
-        let buffer_string = String::from_utf8_lossy(&trimmed_buffer).to_string();
-
-        println!("Received data!");
-
-        let mut packet: packets::BasePacket = match serde_json::from_str(&buffer_string) {
-            Ok(result) => result,
-            Err(e) => {
-                println!("{}", e);
-                continue;
-            }
-        };
-
-        packet.packet_addr = addr.to_string();
-        pi_sender.send(packet).unwrap();
-
-        match socket.send_to("awk".as_bytes(), addr) {
-            Ok(_) => {}
-            Err(_) => {}
-        };
+fn handle_packet(
+    player_command_sender: &Sender<game::PlayerCommand>,
+    client: network::Client,
+    packet: packet::BasePacket,
+) {
+    match packet.packet_type.as_str() {
+        "login" => println!("Login packet received from Client [{}]", client.id),
+        "logout" => println!("Logout packet received from Client [{}]", client.id),
+        "directional" => println!("Directional packet received from Client [{}]", client.id),
+        _ => {
+            println!(
+                "Received unknown packet! Type: [{}] from Client [{}]",
+                packet.packet_type, client.id
+            );
+        }
     }
 }
