@@ -1,10 +1,6 @@
-use std::net::UdpSocket;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{thread, thread::sleep};
-
-use packet::BasePacket;
 
 mod game;
 mod network;
@@ -43,16 +39,12 @@ fn main() {
     loop {
         server.check_socket_error();
 
+        // println!("server {:?}", server);
+
         let current_state = state_receiver.recv().unwrap();
         let current_state_string = serde_json::to_string(&current_state).unwrap();
 
-        server
-            .send_packet_to_all_clients(current_state_string)
-            .expect("Failed to send state to clients");
-
         if server.check_for_packets() {
-            println!("Packet received!");
-
             let (packet, addr) = server.receive_packet_from().unwrap();
 
             let client = match server.check_for_addr(addr.clone()) {
@@ -62,27 +54,36 @@ fn main() {
 
             server.reset_client_timeout(client.id.clone());
 
-            handle_packet(&player_command_sender, client, packet);
+            println!("Received packet from: {} {:?}", client.id.clone(), packet);
+
+            match packet.packet_type.as_str() {
+                "state" => {
+                    let current_state_string_clone = current_state_string.clone();
+                    server
+                        .send_packet_to_client(client.id.clone(), current_state_string_clone)
+                        .unwrap();
+                    continue;
+                }
+                "command" => {
+                    let packet_data: packet::PlayerCommandPacket =
+                        match serde_json::from_str(&packet.packet_data) {
+                            Ok(result) => result,
+                            Err(_) => continue,
+                        };
+
+                    let player_command = game::PlayerCommand {
+                        client_id: client.id.clone(),
+                        command_type: packet_data.command_type,
+                        command_data: packet_data.command_data,
+                    };
+
+                    player_command_sender.send(player_command).unwrap();
+                    continue;
+                }
+                _ => println!("Received unknown packet!"),
+            }
         }
 
         server.check_clients_for_timeout();
-    }
-}
-
-fn handle_packet(
-    player_command_sender: &Sender<game::PlayerCommand>,
-    client: network::Client,
-    packet: packet::BasePacket,
-) {
-    match packet.packet_type.as_str() {
-        "login" => println!("Login packet received from Client [{}]", client.id),
-        "logout" => println!("Logout packet received from Client [{}]", client.id),
-        "directional" => println!("Directional packet received from Client [{}]", client.id),
-        _ => {
-            println!(
-                "Received unknown packet! Type: [{}] from Client [{}]",
-                packet.packet_type, client.id
-            );
-        }
     }
 }

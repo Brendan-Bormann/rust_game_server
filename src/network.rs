@@ -1,8 +1,11 @@
-use std::{net::UdpSocket, time::SystemTime};
+use std::{
+    net::UdpSocket,
+    time::{Duration, SystemTime},
+};
 
 use crate::packet;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     pub id: String,
     pub addr: String,
@@ -21,6 +24,7 @@ impl Client {
     }
 }
 
+#[derive(Debug)]
 pub struct Server {
     pub clients: Vec<Client>,
     pub socket: UdpSocket,
@@ -33,6 +37,9 @@ impl Server {
     pub fn new(server_addr: &str) -> Server {
         let new_socket = UdpSocket::bind(server_addr).unwrap();
         new_socket.set_nonblocking(true).unwrap();
+        new_socket
+            .set_write_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
         println!("- Network started @ {}", server_addr);
 
         Server {
@@ -171,10 +178,7 @@ impl Server {
         let mut buffer = vec![0u8; 4096];
 
         return match self.socket.peek(&mut buffer) {
-            Ok(bytes) => {
-                println!("Peeked {} bytes", bytes);
-                bytes > 0
-            }
+            Ok(bytes) => bytes > 0,
             Err(_) => false,
         };
     }

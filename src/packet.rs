@@ -13,12 +13,14 @@ impl BasePacket {
             packet_data,
         }
     }
-}
 
-pub struct GamePacket {
-    pub packet_type: String,
-    pub packet_data: String,
-    pub player_id: String,
+    pub fn to_string(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    pub fn from_string(packet_string: &str) -> BasePacket {
+        serde_json::from_str(packet_string).unwrap()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -37,4 +39,27 @@ pub struct LogoutPacket {
 pub struct DirectionalPacket {
     pub x: f32,
     pub y: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PlayerCommandPacket {
+    pub command_type: String,
+    pub command_data: String,
+}
+
+impl PlayerCommandPacket {
+    pub fn new(command_type: String, command_data: String) -> PlayerCommandPacket {
+        PlayerCommandPacket {
+            command_type,
+            command_data,
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
+    pub fn from_string(packet_string: &str) -> PlayerCommandPacket {
+        serde_json::from_str(packet_string).unwrap()
+    }
 }
